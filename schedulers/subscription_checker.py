@@ -20,7 +20,6 @@ class SubscriptionChecker:
         for sub in expired:
             user_id = sub['user_id']
             
-            # Проверяем, в канале ли пользователь
             if await self.service.is_user_in_channel(user_id):
                 logger.warning(f"⚠️ Kicking expired user {user_id}")
                 await self.service.kick_user(user_id)
@@ -36,7 +35,6 @@ class SubscriptionChecker:
                 except Exception as e:
                     logger.error(f"Failed to notify user {user_id}: {e}")
             
-            # Удаляем подписку из БД
             await db.delete_subscription(user_id)
 
     async def send_renewal_reminders(self):
