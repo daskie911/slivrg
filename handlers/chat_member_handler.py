@@ -22,14 +22,11 @@ async def user_joined_channel(event: ChatMemberUpdated, bot: Bot):
     
     service = SubscriptionService(bot)
     
-    # Пытаемся найти invite_link
     invite_link = event.invite_link.invite_link if event.invite_link else None
     
-    # Проверяем легитимность входа
     is_valid = await service.handle_user_joined(user_id, invite_link)
     
     if not is_valid:
-        # Кикаем пользователя
         logger.warning(f"🚨 Kicking unauthorized user {user_id}")
         await service.kick_user(user_id)
         
