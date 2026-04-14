@@ -7,6 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from loguru import logger
 from config import config
 from database import db
+from crypto_service import crypto_service
 from datetime import datetime
 
 router = Router()
@@ -21,8 +22,10 @@ class AdminStates(StatesGroup):
     waiting_for_user_id = State()
     waiting_for_channel_id = State()
     waiting_for_broadcast_message = State()
-    waiting_for_price = State()  # ← НОВОЕ
-    waiting_for_subscription_days = State()  # ← НОВОЕ
+    waiting_for_price_stars = State()
+    waiting_for_price_ton = State()
+    waiting_for_price_usdt = State()
+    waiting_for_subscription_days = State()
 
 # ============= Главное меню админ-панели =============
 
@@ -32,6 +35,7 @@ def get_admin_keyboard():
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="👥 Список подписчиков", callback_data="admin_users")],
         [InlineKeyboardButton(text="💰 Доход", callback_data="admin_revenue")],
+        [InlineKeyboardButton(text="💎 Crypto баланс", callback_data="admin_crypto_balance")],
         [InlineKeyboardButton(text="🔍 Найти пользователя", callback_data="admin_find_user")],
         [InlineKeyboardButton(text="📢 Рассылка", callback_data="admin_broadcast")],
         [InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_settings")],
@@ -63,7 +67,14 @@ async def show_stats(callback: CallbackQuery):
         return
     
     active_count = await db.count_active()
-    total_revenue = await db.get_total_revenue()
+    
+    # Получаем доход по всем валютам
+    revenue_stars = await db.get_total_revenue_by_currency('XTR')
+    revenue_ton = await db.get_total_revenue_by_currency('TON')
+    revenue_usdt = await db.get_total_revenue_by_currency('USDT')
+    revenue_btc = await db.get_total_revenue_by_currency('BTC')
+    revenue_eth = await db.get_total_revenue_by_currency('ETH')
+    
     expiring_soon = await db.get_expiring_soon(days=3)
     expired = await db.get_expired_subscriptions(hours_ago=48)
     
@@ -73,9 +84,12 @@ async def show_stats(callback: CallbackQuery):
         f"⏰ Истекают скоро (3 дня): <b>{len(expiring_soon)}</b>\n"
         f"⚠️ Просроченные (>48ч): <b>{len(expired)}</b>\n\n"
         f"💰 <b>Финансы</b>\n"
-        f"⭐ Всего получено: <b>{total_revenue} Stars</b>\n"
-        f"💵 Чистый доход (~70%): <b>{int(total_revenue * 0.7)} Stars</b>\n\n"
-        f"📈 Средний чек: <b>{total_revenue // max(active_count, 1)} Stars</b>"
+        f"⭐ Stars: <b>{int(revenue_stars)}</b>\n"
+        f"💎 TON: <b>{revenue_ton:.2f}</b>\n"
+        f"💵 USDT: <b>{revenue_usdt:.2f}</b>\n"
+        f"₿ BTC: <b>{revenue_btc:.6f}</b>\n"
+        f"Ξ ETH: <b>{revenue_eth:.4f}</b>\n\n"
+        f"💵 Чистый доход Stars (~70%): <b>{int(revenue_stars * 0.7)}</b>"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -131,25 +145,33 @@ async def show_revenue(callback: CallbackQuery):
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
     
-    total = await db.get_total_revenue()
+    revenue_stars = await db.get_total_revenue_by_currency('XTR')
+    revenue_ton = await db.get_total_revenue_by_currency('TON')
+    revenue_usdt = await db.get_total_revenue_by_currency('USDT')
+    revenue_btc = await db.get_total_revenue_by_currency('BTC')
+    revenue_eth = await db.get_total_revenue_by_currency('ETH')
+    
     active_subs = await db.count_active()
     
-    gross = total
-    commission = int(total * 0.3)
-    net = total - commission
+    stars_commission = int(revenue_stars * 0.3)
+    stars_net = int(revenue_stars - stars_commission)
     
     revenue_text = (
         f"💰 <b>Финансовая сводка</b>\n\n"
-        f"📊 <b>Общие показатели</b>\n"
-        f"⭐ Валовый доход: <b>{gross} Stars</b>\n"
-        f"💸 Комиссия Telegram (30%): <b>{commission} Stars</b>\n"
-        f"💵 Чистый доход: <b>{net} Stars</b>\n\n"
+        f"📊 <b>Telegram Stars</b>\n"
+        f"⭐ Валовый доход: <b>{int(revenue_stars)} Stars</b>\n"
+        f"💸 Комиссия (30%): <b>{stars_commission} Stars</b>\n"
+        f"💵 Чистый доход: <b>{stars_net} Stars</b>\n\n"
+        f"💎 <b>Криптовалюта</b>\n"
+        f"TON: <b>{revenue_ton:.2f}</b>\n"
+        f"USDT: <b>{revenue_usdt:.2f}</b>\n"
+        f"BTC: <b>{revenue_btc:.6f}</b>\n"
+        f"ETH: <b>{revenue_eth:.4f}</b>\n\n"
         f"👥 <b>Подписчики</b>\n"
-        f"Активных: <b>{active_subs}</b>\n"
-        f"Средний чек: <b>{gross // max(active_subs, 1)} Stars</b>\n\n"
-        f"💡 <b>Для вывода средств:</b>\n"
-        f"@BotFather → /mybots → Ваш бот\n"
-        f"→ Bot Settings → Payments → Balance"
+        f"Активных: <b>{active_subs}</b>\n\n"
+        f"💡 <b>Для вывода:</b>\n"
+        f"Stars: @BotFather → Payments\n"
+        f"Crypto: @CryptoBot → My Apps"
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -158,6 +180,45 @@ async def show_revenue(callback: CallbackQuery):
     
     await callback.message.edit_text(revenue_text, parse_mode="HTML", reply_markup=keyboard)
     await callback.answer()
+
+# ============= Crypto баланс =============
+
+@router.callback_query(F.data == "admin_crypto_balance")
+async def show_crypto_balance(callback: CallbackQuery):
+    """Показать баланс Crypto Bot"""
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    
+    if not crypto_service.enabled:
+        await callback.answer("❌ Crypto Bot не настроен", show_alert=True)
+        return
+    
+    await callback.answer("🔍 Получаю баланс...")
+    
+    balance = await crypto_service.get_balance()
+    
+    if not balance:
+        await callback.answer("❌ Ошибка получения баланса", show_alert=True)
+        return
+    
+    balance_text = "💎 <b>Баланс Crypto Bot</b>\n\n"
+    
+    for currency, amount in balance.items():
+        if amount > 0:
+            balance_text += f"{currency}: <b>{amount:.6f}</b>\n"
+    
+    if len(balance_text.split('\n')) == 2:
+        balance_text += "\n<i>Баланс пуст</i>"
+    
+    balance_text += "\n\n💡 Вывести можно через @CryptoBot"
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_crypto_balance")],
+        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]
+    ])
+    
+    await callback.message.edit_text(balance_text, parse_mode="HTML", reply_markup=keyboard)
 
 # ============= Поиск пользователя =============
 
@@ -308,93 +369,181 @@ async def show_settings(callback: CallbackQuery):
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
     
+    crypto_status = "✅ Подключен" if crypto_service.enabled else "❌ Не настроен"
+    
     settings_text = (
         f"⚙️ <b>Настройки бота</b>\n\n"
-        f"💰 Цена подписки: <b>{config.STARS_PRICE} Stars</b>\n"
+        f"<b>Цены:</b>\n"
+        f"⭐ Stars: <b>{config.STARS_PRICE} Stars</b>\n"
+        f"💎 TON: <b>{config.CRYPTO_PRICE_TON} TON</b>\n"
+        f"💵 USDT: <b>{config.CRYPTO_PRICE_USDT} USDT</b>\n\n"
         f"📅 Срок подписки: <b>{config.SUBSCRIPTION_DAYS} дней</b>\n"
-        f"⏰ Срок invite-ссылки: <b>{config.INVITE_LINK_EXPIRE_MINUTES} минут</b>\n"
-        f"🔔 Напоминание за: <b>{config.REMINDER_DAYS_BEFORE} дня</b>\n"
-        f"⚠️ Кик после истечения: <b>{config.KICK_AFTER_EXPIRE_HOURS} часов</b>\n\n"
+        f"⏰ Срок invite-ссылки: <b>{config.INVITE_LINK_EXPIRE_MINUTES} минут</b>\n\n"
         f"🆔 Channel ID: <code>{config.CHANNEL_ID}</code>\n"
-        f"👤 Админы: <code>{', '.join(map(str, config.ADMIN_IDS))}</code>"
+        f"💎 Crypto Bot: {crypto_status}"
     )
     
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💰 Изменить цену", callback_data="admin_change_price")],
-        [InlineKeyboardButton(text="📅 Изменить срок подписки", callback_data="admin_change_days")],
-        [InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")]
-    ])
+    keyboard_buttons = [
+        [InlineKeyboardButton(text="⭐ Изменить цену Stars", callback_data="admin_change_price_stars")],
+    ]
+    
+    if crypto_service.enabled:
+        keyboard_buttons.append([InlineKeyboardButton(text="💎 Изменить цену TON", callback_data="admin_change_price_ton")])
+        keyboard_buttons.append([InlineKeyboardButton(text="💵 Изменить цену USDT", callback_data="admin_change_price_usdt")])
+    
+    keyboard_buttons.append([InlineKeyboardButton(text="📅 Изменить срок", callback_data="admin_change_days")])
+    keyboard_buttons.append([InlineKeyboardButton(text="🔙 Назад", callback_data="admin_back")])
+    
+    keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_buttons)
     
     await callback.message.edit_text(settings_text, parse_mode="HTML", reply_markup=keyboard)
     await callback.answer()
 
-# ============= Изменение цены =============
+# ============= Изменение цен =============
 
-@router.callback_query(F.data == "admin_change_price")
-async def change_price_start(callback: CallbackQuery, state: FSMContext):
-    """Начать изменение цены"""
+@router.callback_query(F.data == "admin_change_price_stars")
+async def change_price_stars_start(callback: CallbackQuery, state: FSMContext):
+    """Начать изменение цены Stars"""
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
     
     await callback.message.answer(
-        f"💰 <b>Изменение цены подписки</b>\n\n"
+        f"💰 <b>Изменение цены Stars</b>\n\n"
         f"Текущая цена: <b>{config.STARS_PRICE} Stars</b>\n\n"
-        f"Отправьте новую цену в Stars (целое число):\n\n"
+        f"Отправьте новую цену (целое число):\n\n"
         f"Для отмены отправьте /cancel",
         parse_mode="HTML"
     )
-    await state.set_state(AdminStates.waiting_for_price)
+    await state.set_state(AdminStates.waiting_for_price_stars)
     await callback.answer()
 
-@router.message(AdminStates.waiting_for_price, Command("cancel"))
-async def change_price_cancel(message: Message, state: FSMContext):
-    """Отмена изменения цены"""
+@router.message(AdminStates.waiting_for_price_stars, Command("cancel"))
+async def change_price_stars_cancel(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer(
-        "❌ Изменение цены отменено",
-        reply_markup=get_admin_keyboard()
-    )
+    await message.answer("❌ Изменение отменено", reply_markup=get_admin_keyboard())
 
-@router.message(AdminStates.waiting_for_price)
-async def change_price_process(message: Message, state: FSMContext):
-    """Обработка изменения цены"""
+@router.message(AdminStates.waiting_for_price_stars)
+async def change_price_stars_process(message: Message, state: FSMContext):
     try:
         new_price = int(message.text.strip())
-        
-        if new_price < 1:
-            await message.answer("❌ Цена должна быть больше 0. Попробуйте снова или /cancel для отмены.")
-            return
-        
-        if new_price > 2500:
-            await message.answer("❌ Максимальная цена 2500 Stars. Попробуйте снова или /cancel для отмены.")
+        if new_price < 1 or new_price > 2500:
+            await message.answer("❌ Цена должна быть от 1 до 2500 Stars")
             return
         
         old_price = config.STARS_PRICE
-        config.update_price(new_price)
+        config.update_price(new_price, currency='stars')
         
         await message.answer(
-            f"✅ <b>Цена успешно изменена!</b>\n\n"
-            f"Было: <b>{old_price} Stars</b>\n"
-            f"Стало: <b>{new_price} Stars</b>\n\n"
-            f"💡 Изменения вступили в силу немедленно.",
+            f"✅ <b>Цена Stars изменена!</b>\n\n"
+            f"Было: {old_price} Stars\n"
+            f"Стало: {new_price} Stars",
             parse_mode="HTML",
             reply_markup=get_admin_keyboard()
         )
-        
-        logger.success(f"💰 Admin {message.from_user.id} changed price: {old_price} → {new_price}")
-        
+        logger.success(f"Admin {message.from_user.id} changed Stars price: {old_price} → {new_price}")
     except ValueError:
-        await message.answer("❌ Неверный формат. Введите целое число или /cancel для отмены.")
+        await message.answer("❌ Неверный формат. Введите целое число")
         return
     
     await state.clear()
 
-# ============= Изменение срока подписки =============
+@router.callback_query(F.data == "admin_change_price_ton")
+async def change_price_ton_start(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    
+    await callback.message.answer(
+        f"💎 <b>Изменение цены TON</b>\n\n"
+        f"Текущая цена: <b>{config.CRYPTO_PRICE_TON} TON</b>\n\n"
+        f"Отправьте новую цену (например: 1.5):\n\n"
+        f"Для отмены отправьте /cancel",
+        parse_mode="HTML"
+    )
+    await state.set_state(AdminStates.waiting_for_price_ton)
+    await callback.answer()
+
+@router.message(AdminStates.waiting_for_price_ton, Command("cancel"))
+async def change_price_ton_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Изменение отменено", reply_markup=get_admin_keyboard())
+
+@router.message(AdminStates.waiting_for_price_ton)
+async def change_price_ton_process(message: Message, state: FSMContext):
+    try:
+        new_price = float(message.text.strip().replace(',', '.'))
+        if new_price <= 0 or new_price > 1000:
+            await message.answer("❌ Цена должна быть от 0.01 до 1000 TON")
+            return
+        
+        old_price = config.CRYPTO_PRICE_TON
+        config.update_price(new_price, currency='ton')
+        
+        await message.answer(
+            f"✅ <b>Цена TON изменена!</b>\n\n"
+            f"Было: {old_price} TON\n"
+            f"Стало: {new_price} TON",
+            parse_mode="HTML",
+            reply_markup=get_admin_keyboard()
+        )
+        logger.success(f"Admin {message.from_user.id} changed TON price: {old_price} → {new_price}")
+    except ValueError:
+        await message.answer("❌ Неверный формат. Введите число")
+        return
+    
+    await state.clear()
+
+@router.callback_query(F.data == "admin_change_price_usdt")
+async def change_price_usdt_start(callback: CallbackQuery, state: FSMContext):
+    if not is_admin(callback.from_user.id):
+        await callback.answer("❌ Нет доступа", show_alert=True)
+        return
+    
+    await callback.message.answer(
+        f"💵 <b>Изменение цены USDT</b>\n\n"
+        f"Текущая цена: <b>{config.CRYPTO_PRICE_USDT} USDT</b>\n\n"
+        f"Отправьте новую цену (например: 2.0):\n\n"
+        f"Для отмены отправьте /cancel",
+        parse_mode="HTML"
+    )
+    await state.set_state(AdminStates.waiting_for_price_usdt)
+    await callback.answer()
+
+@router.message(AdminStates.waiting_for_price_usdt, Command("cancel"))
+async def change_price_usdt_cancel(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Изменение отменено", reply_markup=get_admin_keyboard())
+
+@router.message(AdminStates.waiting_for_price_usdt)
+async def change_price_usdt_process(message: Message, state: FSMContext):
+    try:
+        new_price = float(message.text.strip().replace(',', '.'))
+        if new_price <= 0 or new_price > 10000:
+            await message.answer("❌ Цена должна быть от 0.01 до 10000 USDT")
+            return
+        
+        old_price = config.CRYPTO_PRICE_USDT
+        config.update_price(new_price, currency='usdt')
+        
+        await message.answer(
+            f"✅ <b>Цена USDT изменена!</b>\n\n"
+            f"Было: {old_price} USDT\n"
+            f"Стало: {new_price} USDT",
+            parse_mode="HTML",
+            reply_markup=get_admin_keyboard()
+        )
+        logger.success(f"Admin {message.from_user.id} changed USDT price: {old_price} → {new_price}")
+    except ValueError:
+        await message.answer("❌ Неверный формат. Введите число")
+        return
+    
+    await state.clear()
+
+# ============= Изменение срока =============
 
 @router.callback_query(F.data == "admin_change_days")
 async def change_days_start(callback: CallbackQuery, state: FSMContext):
-    """Начать изменение срока подписки"""
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
@@ -402,7 +551,7 @@ async def change_days_start(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer(
         f"📅 <b>Изменение срока подписки</b>\n\n"
         f"Текущий срок: <b>{config.SUBSCRIPTION_DAYS} дней</b>\n\n"
-        f"Отправьте новый срок в днях (целое число):\n\n"
+        f"Отправьте новый срок (целое число):\n\n"
         f"Для отмены отправьте /cancel",
         parse_mode="HTML"
     )
@@ -411,43 +560,30 @@ async def change_days_start(callback: CallbackQuery, state: FSMContext):
 
 @router.message(AdminStates.waiting_for_subscription_days, Command("cancel"))
 async def change_days_cancel(message: Message, state: FSMContext):
-    """Отмена изменения срока"""
     await state.clear()
-    await message.answer(
-        "❌ Изменение срока отменено",
-        reply_markup=get_admin_keyboard()
-    )
+    await message.answer("❌ Изменение отменено", reply_markup=get_admin_keyboard())
 
 @router.message(AdminStates.waiting_for_subscription_days)
 async def change_days_process(message: Message, state: FSMContext):
-    """Обработка изменения срока подписки"""
     try:
         new_days = int(message.text.strip())
-        
-        if new_days < 1:
-            await message.answer("❌ Срок должен быть больше 0. Попробуйте снова или /cancel для отмены.")
-            return
-        
-        if new_days > 365:
-            await message.answer("❌ Максимальный срок 365 дней. Попробуйте снова или /cancel для отмены.")
+        if new_days < 1 or new_days > 365:
+            await message.answer("❌ Срок должен быть от 1 до 365 дней")
             return
         
         old_days = config.SUBSCRIPTION_DAYS
         config.update_subscription_days(new_days)
         
         await message.answer(
-            f"✅ <b>Срок подписки успешно изменён!</b>\n\n"
-            f"Было: <b>{old_days} дней</b>\n"
-            f"Стало: <b>{new_days} дней</b>\n\n"
-            f"💡 Изменения применятся к новым подпискам.",
+            f"✅ <b>Срок подписки изменён!</b>\n\n"
+            f"Было: {old_days} дней\n"
+            f"Стало: {new_days} дней",
             parse_mode="HTML",
             reply_markup=get_admin_keyboard()
         )
-        
-        logger.success(f"📅 Admin {message.from_user.id} changed subscription days: {old_days} → {new_days}")
-        
+        logger.success(f"Admin {message.from_user.id} changed subscription days: {old_days} → {new_days}")
     except ValueError:
-        await message.answer("❌ Неверный формат. Введите целое число или /cancel для отмены.")
+        await message.answer("❌ Неверный формат. Введите целое число")
         return
     
     await state.clear()
@@ -456,7 +592,6 @@ async def change_days_process(message: Message, state: FSMContext):
 
 @router.callback_query(F.data.startswith("admin_delete_"))
 async def delete_subscription(callback: CallbackQuery, bot: Bot):
-    """Удалить подписку пользователя"""
     if not is_admin(callback.from_user.id):
         await callback.answer("❌ Нет доступа", show_alert=True)
         return
@@ -466,7 +601,6 @@ async def delete_subscription(callback: CallbackQuery, bot: Bot):
     from subscription_service import SubscriptionService
     service = SubscriptionService(bot)
     await service.kick_user(user_id)
-    
     await db.delete_subscription(user_id)
     
     await callback.answer("🗑️ Подписка удалена, пользователь кикнут", show_alert=True)
@@ -481,7 +615,6 @@ async def delete_subscription(callback: CallbackQuery, bot: Bot):
 
 @router.callback_query(F.data == "admin_back")
 async def admin_back(callback: CallbackQuery, state: FSMContext):
-    """Вернуться в главное меню"""
     await state.clear()
     await callback.message.edit_text(
         "🎛️ <b>Админ-панель</b>\n\n"
@@ -493,7 +626,6 @@ async def admin_back(callback: CallbackQuery, state: FSMContext):
 
 @router.callback_query(F.data == "admin_close")
 async def admin_close(callback: CallbackQuery, state: FSMContext):
-    """Закрыть админ-панель"""
     await state.clear()
     await callback.message.delete()
     await callback.answer("❌ Панель закрыта")
@@ -502,7 +634,6 @@ async def admin_close(callback: CallbackQuery, state: FSMContext):
 
 @router.message(Command("stats"))
 async def cmd_stats(message: Message):
-    """Быстрая статистика"""
     if not is_admin(message.from_user.id):
         await message.answer("❌ У вас нет прав для этой команды.")
         return
