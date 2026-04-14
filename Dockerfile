@@ -2,15 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Установка зависимостей
+# Копируем requirements и устанавливаем зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копирование кода
+# Копируем все файлы проекта
 COPY . .
 
-# Создание папок для данных и логов
+# Создаём необходимые папки
 RUN mkdir -p data logs
 
-# Запуск бота
+# Запускаем бота
 CMD ["python", "main.py"]
