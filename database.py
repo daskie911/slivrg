@@ -36,11 +36,28 @@ class Database:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 username TEXT,
-                amount INTEGER,
-                currency TEXT DEFAULT 'XTR',
+                amount REAL,
+                currency TEXT,
                 payment_date TEXT,
+                payment_method TEXT,
                 telegram_payment_charge_id TEXT,
-                provider_payment_charge_id TEXT
+                crypto_invoice_id TEXT,
+                crypto_hash TEXT
+            )
+        """)
+        
+        # Таблица ожидающих Crypto платежей
+        await self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS pending_crypto_payments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                username TEXT,
+                invoice_id INTEGER,
+                amount REAL,
+                currency TEXT,
+                created_at TEXT,
+                expires_at TEXT,
+                status TEXT DEFAULT 'pending'
             )
         """)
         
@@ -155,43 +172,110 @@ class Database:
             row = await cursor.fetchone()
             return row[0] if row else 0
 
-    # ===== Методы для платежей =====
+    # ===== Платежи =====
 
     async def log_payment(
         self, 
         user_id: int, 
         username: str, 
-        amount: int,
+        amount: float,
+        currency: str = 'XTR',
+        payment_method: str = 'stars',
         telegram_charge_id: str = None,
-        provider_charge_id: str = None
+        crypto_invoice_id: str = None,
+        crypto_hash: str = None
     ):
         """Сохранить платёж в историю"""
         await self.conn.execute("""
             INSERT INTO payments 
-            (user_id, username, amount, payment_date, telegram_payment_charge_id, provider_payment_charge_id)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (user_id, username, amount, currency, payment_date, payment_method, 
+             telegram_payment_charge_id, crypto_invoice_id, crypto_hash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             user_id,
             username,
             amount,
+            currency,
             datetime.utcnow().isoformat(),
+            payment_method,
             telegram_charge_id,
-            provider_charge_id
+            crypto_invoice_id,
+            crypto_hash
         ))
         await self.conn.commit()
-        logger.info(f"💾 Payment logged: {user_id} - {amount} Stars")
+        logger.info(f"💾 Payment logged: {user_id} - {amount} {currency} via {payment_method}")
+
+    async def get_total_revenue_by_currency(self, currency: str = 'XTR') -> float:
+        """Получить общую сумму дохода по валюте"""
+        try:
+            async with self.conn.execute(
+                "SELECT SUM(amount) FROM payments WHERE currency = ?",
+                (currency,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return float(row[0]) if row and row[0] else 0.0
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to get revenue: {e}")
+            return 0.0
 
     async def get_total_revenue(self) -> int:
         """Получить общую сумму дохода в Stars"""
-        try:
-            async with self.conn.execute(
-                "SELECT SUM(amount) FROM payments"
-            ) as cursor:
-                row = await cursor.fetchone()
-                return row[0] if row and row[0] else 0
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to get revenue: {e}")
-            return 0
+        return int(await self.get_total_revenue_by_currency('XTR'))
+
+    # ===== Crypto платежи =====
+
+    async def create_pending_crypto_payment(
+        self,
+        user_id: int,
+        username: str,
+        invoice_id: int,
+        amount: float,
+        currency: str,
+        expires_at: str
+    ):
+        """Создать ожидающий Crypto платёж"""
+        await self.conn.execute("""
+            INSERT INTO pending_crypto_payments 
+            (user_id, username, invoice_id, amount, currency, created_at, expires_at, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')
+        """, (
+            user_id,
+            username,
+            invoice_id,
+            amount,
+            currency,
+            datetime.utcnow().isoformat(),
+            expires_at
+        ))
+        await self.conn.commit()
+        logger.info(f"💎 Pending crypto payment created: invoice {invoice_id} for user {user_id}")
+
+    async def get_pending_crypto_payment(self, user_id: int) -> Optional[dict]:
+        """Получить ожидающий Crypto платёж"""
+        async with self.conn.execute(
+            "SELECT * FROM pending_crypto_payments WHERE user_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1",
+            (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_pending_crypto_payment_by_invoice(self, invoice_id: int) -> Optional[dict]:
+        """Получить платёж по invoice_id"""
+        async with self.conn.execute(
+            "SELECT * FROM pending_crypto_payments WHERE invoice_id = ? AND status = 'pending'",
+            (invoice_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def complete_crypto_payment(self, invoice_id: int):
+        """Отметить Crypto платёж как выполненный"""
+        await self.conn.execute(
+            "UPDATE pending_crypto_payments SET status = 'completed' WHERE invoice_id = ? AND status = 'pending'",
+            (invoice_id,)
+        )
+        await self.conn.commit()
+        logger.success(f"💎 Crypto payment completed: invoice {invoice_id}")
 
 # Глобальный экземпляр
 db = Database(config.DATABASE_PATH)
