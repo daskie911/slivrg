@@ -3,13 +3,14 @@ import sys
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.fsm.storage.memory import MemoryStorage  # ← ДОБАВЬТЕ ЭТУ СТРОКУ
+from aiogram.fsm.storage.memory import MemoryStorage
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
 
 from config import config
 from database import db
 from schedulers.subscription_checker import SubscriptionChecker
+from crypto_service import crypto_service
 
 # Импорт роутеров
 from handlers import start_handler
@@ -45,12 +46,18 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     
-    # ✅ ДОБАВЬТЕ MemoryStorage:
+    # Добавление MemoryStorage для FSM
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
 
     # Подключение к БД
     await db.connect()
+
+    # Проверка Crypto Bot
+    if crypto_service.enabled:
+        logger.info(f"💎 Crypto Bot payments enabled")
+    else:
+        logger.warning("⚠️ Crypto Bot payments disabled (no token)")
 
     # Регистрация роутеров
     dp.include_router(start_handler.router)
@@ -87,6 +94,7 @@ async def main():
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
         await db.close()
+        await crypto_service.close()
         await bot.session.close()
 
 if __name__ == "__main__":
