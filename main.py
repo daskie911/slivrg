@@ -87,7 +87,7 @@ async def main():
         )
         await callback.answer()
 
-    # Запуск бота
+    # Запуск бот
     logger.success("✅ Bot started successfully")
     
     try:
