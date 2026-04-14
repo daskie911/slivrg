@@ -11,7 +11,6 @@ class SubscriptionService:
 
     async def create_invite_link(self, user_id: int, username: str) -> str:
         """Создать уникальную invite-ссылку для пользователя"""
-        # ✅ ИСПРАВЛЕНИЕ: используем timezone-aware datetime
         expire_date = datetime.now(timezone.utc) + timedelta(minutes=config.INVITE_LINK_EXPIRE_MINUTES)
         
         try:
@@ -19,7 +18,7 @@ class SubscriptionService:
                 chat_id=config.CHANNEL_ID,
                 member_limit=1,
                 expire_date=expire_date,
-                name=f"User {user_id} - {username or 'NoUsername'}"[:32]  # ← Telegram ограничивает 32 символами
+                name=f"User {user_id} - {username or 'NoUsername'}"[:32]
             )
             
             logger.success(f"🔗 Invite link created: {invite.invite_link}")
@@ -42,10 +41,8 @@ class SubscriptionService:
 
     async def process_successful_payment(self, user_id: int, username: str):
         """Обработка успешной оплаты"""
-        # Создаём invite-ссылку
         invite_link = await self.create_invite_link(user_id, username)
         
-        # Сохраняем подписку в БД
         await db.create_subscription(
             user_id=user_id,
             username=username,
@@ -61,21 +58,18 @@ class SubscriptionService:
             logger.warning(f"⚠️ User {user_id} joined without invite link")
             return False
         
-        # Ищем подписку по invite-ссылке
         subscription = await db.get_subscription_by_invite(invite_link)
         
         if not subscription:
             logger.warning(f"⚠️ No subscription found for invite: {invite_link}")
             return False
         
-        # Проверяем, совпадает ли user_id
         if subscription['user_id'] != user_id:
             logger.warning(
                 f"🚨 User {user_id} tried to join with link for user {subscription['user_id']}"
             )
-            return False  # Нужно кикнуть
+            return False
         
-        # Всё ок — отзываем ссылку
         await self.revoke_invite_link(invite_link)
         await db.revoke_invite_link(user_id)
         logger.success(f"✅ User {user_id} successfully joined, invite revoked")
@@ -88,7 +82,6 @@ class SubscriptionService:
                 chat_id=config.CHANNEL_ID,
                 user_id=user_id
             )
-            # Сразу разбаниваем, чтобы мог войти снова при покупке
             await self.bot.unban_chat_member(
                 chat_id=config.CHANNEL_ID,
                 user_id=user_id
